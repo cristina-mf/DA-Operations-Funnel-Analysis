@@ -88,5 +88,5 @@ LinkedIn generates the most revenue by volume but converts at only 21.1%. Improv
 
 ## Author
 Cristina Montenegro
-Data Analyst | HR · Operations · People Analytics |
+Data & Business Analyst | Engineering & HR background
 [LinkedIn](www.linkedin.com/in/cristinamf) | [Portfolio](https://viridian-popcorn-1ee.notion.site/Cristina-Montenegro-Data-Analyst-Portfolio-32bfa0da4ad080cc9589eba84b308dcb)
