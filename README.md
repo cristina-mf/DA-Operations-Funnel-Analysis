@@ -37,6 +37,9 @@ Leads grouped by entry month to track conversion performance over time, identify
 **5. Dashboard**
 Interactive Tableau dashboard combining all four analytical views with filters for dynamic exploration by stakeholders.
 
+**6. Cloud Data Warehouse Migration**
+Core dataset and analytical queries migrated from SQLite to Snowflake to practice cloud data warehouse architecture. Queries rewritten using Snowflake-specific features (`QUALIFY`, window functions) to extract deeper insights than the original SQL allowed. See `/snowflake` for details.
+
 ## Key Findings
 **Funnel Drop-off**
 - 35.5% of all leads (135) never advanced past the initial Lead stage which is the largest single leak in the funnel
@@ -72,6 +75,19 @@ The firm's best conversion months (Jan, May, Nov) align with B2B budget cycle tr
 **4. Prioritize LinkedIn qualification improvement**
 LinkedIn generates the most revenue by volume but converts at only 21.1%. Improving qualification criteria at entry could increase conversion without requiring more leads.
 
+## Cloud Migration: SQLite → Snowflake
+To extend this project's technical scope, the core dataset and analytical queries were migrated from SQLite to **Snowflake**, practicing cloud data warehouse architecture and SQL patterns not available in SQLite.
+
+**What changed:**
+- **Schema & loading:** Tables recreated in Snowflake with explicit typing (`DATE`, `NUMBER`, `BOOLEAN`), data loaded via Snowsight's file-loading wizard with `COPY INTO` under the hood.
+- **Query upgrades:** All four core queries (`bottleneck_analysis`, `channel_performance`, `funnel_dropoff`, `monthly_kpi_tracker`) rewritten to use Snowflake-specific features:
+  - `QUALIFY` to filter window-function results without a wrapping subquery (isolating the #1 bottleneck per channel, top 3 channels by conversion)
+  - Window functions (`RANK()`, `DENSE_RANK()`, `LAG()`) for per-channel bottleneck ranking, revenue contribution %, stage-to-stage drop-off rate, and month-over-month revenue growth
+  - A 3-month moving average (`AVG() OVER (ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)`) to smooth monthly revenue volatility
+- **Lesson learned:** SQLite treats `0/1` and booleans interchangeably; Snowflake enforces strict typing, so `SUM()`/`AVG()` on a `BOOLEAN` column required an explicit `::INT` cast, and comparisons needed `= TRUE` instead of `= 1`. A concrete example of why cloud warehouse migrations surface type-safety issues that a local, loosely-typed database won't catch.
+
+All setup, loading, and query scripts are in `/snowflake`.
+
 ## AI & Automation Layer
 - **Data generation:** Both datasets generated using Claude AI with structured prompts. Prompts documented in 
   `/ai_prompts/data_generation_prompt.md`
@@ -81,12 +97,13 @@ LinkedIn generates the most revenue by volume but converts at only 21.1%. Improv
 ## Tools Used
 ![Python](https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white)
 ![SQL](https://img.shields.io/badge/SQL-SQLite-003B57?style=flat&logo=sqlite&logoColor=white)
+![Snowflake](https://img.shields.io/badge/Snowflake-29B5E8?style=flat&logo=snowflake&logoColor=white)
 ![Tableau](https://img.shields.io/badge/Tableau-E97627?style=flat&logo=tableau&logoColor=white)
 ![Claude AI](https://img.shields.io/badge/Claude-AI-black?style=flat)
 
-`Python` · `Pandas` · `Matplotlib` · `Seaborn` · `SQL` · `SQLite` · `Tableau` · `Excel` · `Claude AI`
+`Python` · `Pandas` · `Matplotlib` · `Seaborn` · `SQL` · `SQLite` · `Snowflake` · `Tableau` · `Excel` · `Claude AI`
 
 ## Author
 Cristina Montenegro
-Data Analyst | HR · Operations · People Analytics |
+Data & Business Analyst | Engineering & HR background
 [LinkedIn](www.linkedin.com/in/cristinamf) | [Portfolio](https://viridian-popcorn-1ee.notion.site/Cristina-Montenegro-Data-Analyst-Portfolio-32bfa0da4ad080cc9589eba84b308dcb)
