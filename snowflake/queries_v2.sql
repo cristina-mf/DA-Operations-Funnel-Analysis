@@ -1,9 +1,9 @@
 -- =============================================================
 -- queries_v2.sql
--- Consultas migradas y mejoradas para Snowflake
--- Proyecto: DA-Operations-Funnel-Analysis
--- Cada consulta incluye: versión original (SQLite) + versión
--- mejorada aprovechando funciones de ventana / QUALIFY de Snowflake
+-- Queries migrated and enhanced for Snowflake
+-- Project: DA-Operations-Funnel-Analysis
+-- Each query includes: original version (SQLite) + enhanced
+-- version leveraging Snowflake window functions / QUALIFY
 -- =============================================================
 
 USE DATABASE OPS_FUNNEL_DB;
@@ -12,9 +12,9 @@ USE SCHEMA ANALYTICS;
 
 -- =============================================================
 -- 1. BOTTLENECK ANALYSIS
--- Original: promedios agregados por etapa y canal.
--- Mejora: RANK() + QUALIFY para aislar el cuello de botella #1
---         de cada canal automáticamente.
+-- Original: aggregated averages by stage and channel.
+-- Enhancement: RANK() + QUALIFY to automatically isolate the
+--              #1 bottleneck stage for each channel.
 -- =============================================================
 
 -- Original
@@ -29,7 +29,13 @@ FROM leads_clean
 GROUP BY stage_reached, channel
 ORDER BY avg_days DESC;
 
--- Mejorada
+-- Enhanced
+-- Note: 'Closed_Won' is excluded from the ranking because
+-- days_in_funnel is cumulative — a lead that reached close
+-- necessarily accumulated more days than one that stalled
+-- earlier, so Closed_Won would always show up as the "bottleneck"
+-- without actually being one. What we really want to identify
+-- is where leads that HAVE NOT closed yet are getting stuck.
 SELECT
     channel,
     stage_reached,
@@ -40,6 +46,7 @@ SELECT
         ORDER BY AVG(days_in_funnel) DESC
     ) AS bottleneck_rank
 FROM leads_clean
+WHERE stage_reached != 'Closed_Won'
 GROUP BY channel, stage_reached
 QUALIFY bottleneck_rank = 1
 ORDER BY avg_days DESC;
@@ -47,14 +54,15 @@ ORDER BY avg_days DESC;
 
 -- =============================================================
 -- 2. CHANNEL PERFORMANCE
--- Original: canales ordenados por tasa de conversión.
--- Mejora: DENSE_RANK() + QUALIFY para quedarnos con el Top 3,
---         y % de contribución de cada canal al ingreso total.
+-- Original: channels ordered by conversion rate.
+-- Enhancement: DENSE_RANK() + QUALIFY to keep only the Top 3,
+--              plus each channel's % contribution to total revenue.
 -- =============================================================
 
 -- Original
--- Nota: converted es BOOLEAN en Snowflake, por lo que se convierte a
--- INT (::INT) antes de sumarlo/promediarlo (SQLite lo hacía implícitamente).
+-- Note: converted is BOOLEAN in Snowflake, so it's cast to
+-- INT (::INT) before summing/averaging (SQLite handled this
+-- implicitly).
 SELECT
     channel,
     COUNT(*) AS total_leads,
@@ -68,7 +76,7 @@ FROM leads_clean
 GROUP BY channel
 ORDER BY conversion_rate_pct DESC;
 
--- Mejorada
+-- Enhanced
 SELECT
     channel,
     COUNT(*) AS total_leads,
@@ -91,17 +99,17 @@ ORDER BY conversion_rank;
 
 -- =============================================================
 -- 3. FUNNEL DROPOFF
--- Original: % del total de leads por etapa.
--- Mejora: LAG() para calcular la tasa de abandono real entre
---         etapas consecutivas del embudo.
--- Nota: stage_reached representa la etapa MÁS AVANZADA alcanzada
---       por cada lead, así que esto es una aproximación del
---       abandono real (no un conteo acumulado tradicional).
+-- Original: % of total leads per stage.
+-- Enhancement: LAG() to calculate the real drop-off rate between
+--              consecutive funnel stages.
+-- Note: stage_reached represents the FURTHEST stage each lead
+--       reached, so this is an approximation of true drop-off
+--       (not a traditional cumulative funnel count).
 -- =============================================================
 
 -- Original
--- Nota: converted es BOOLEAN, se compara con TRUE (no con 1) y se
--- convierte a INT (::INT) antes de promediar.
+-- Note: converted is BOOLEAN, compared with TRUE (not 1) and
+-- cast to INT (::INT) before averaging.
 SELECT
     stage_reached,
     COUNT(*) AS total_leads,
@@ -112,7 +120,14 @@ FROM leads_clean
 GROUP BY stage_reached
 ORDER BY total_leads DESC;
 
--- Mejorada
+-- Enhanced
+-- Note: stage_reached buckets are mutually exclusive (each lead is
+-- counted only once, at the furthest stage it reached), so raw
+-- total_leads per stage is NOT cumulative. Applying LAG() directly
+-- on that produces nonsensical negative "drop-off" percentages once
+-- a later stage's bucket happens to hold more leads than an earlier
+-- one. We first convert to a CUMULATIVE "reached at least this
+-- stage" count, then compute the real drop-off between stages.
 WITH funnel_ordered AS (
     SELECT
         stage_reached,
@@ -123,27 +138,41 @@ WITH funnel_ordered AS (
             WHEN 'Negotiation' THEN 4
             WHEN 'Closed_Won'  THEN 5
         END AS stage_order,
-        COUNT(*) AS total_leads
+        COUNT(*) AS leads_at_this_stage
     FROM leads_clean
     GROUP BY stage_reached
+),
+funnel_cumulative AS (
+    SELECT
+        stage_reached,
+        stage_order,
+        leads_at_this_stage,
+        -- leads that reached AT LEAST this stage = sum of this
+        -- stage's bucket + every later stage's bucket
+        SUM(leads_at_this_stage) OVER (
+            ORDER BY stage_order DESC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS leads_reached_at_least
+    FROM funnel_ordered
 )
 SELECT
     stage_reached,
     stage_order,
-    total_leads,
-    LAG(total_leads) OVER (ORDER BY stage_order) AS leads_etapa_anterior,
+    leads_reached_at_least,
+    LAG(leads_reached_at_least) OVER (ORDER BY stage_order) AS leads_previous_stage,
     ROUND(
-        (1 - total_leads * 1.0 / NULLIF(LAG(total_leads) OVER (ORDER BY stage_order), 0)) * 100
-    , 1) AS drop_off_pct_vs_etapa_anterior
-FROM funnel_ordered
+        (1 - leads_reached_at_least * 1.0
+         / NULLIF(LAG(leads_reached_at_least) OVER (ORDER BY stage_order), 0)) * 100
+    , 1) AS drop_off_pct_vs_previous_stage
+FROM funnel_cumulative
 ORDER BY stage_order;
 
 
 -- =============================================================
 -- 4. MONTHLY KPI TRACKER
--- Original: dato de cada mes de forma aislada.
--- Mejora: LAG() para crecimiento mes a mes + AVG() OVER()
---         para promedio móvil de 3 meses.
+-- Original: each month's figures shown in isolation.
+-- Enhancement: LAG() for month-over-month growth + AVG() OVER()
+--              for a 3-month moving average.
 -- =============================================================
 
 -- Original
@@ -157,7 +186,7 @@ SELECT
 FROM monthly_metrics
 ORDER BY month;
 
--- Mejorada
+-- Enhanced
 SELECT
     month,
     new_leads,
@@ -165,7 +194,7 @@ SELECT
     ROUND(conversion_rate * 100, 1) AS conversion_rate_pct,
     avg_cycle_days,
     revenue,
-    LAG(revenue) OVER (ORDER BY month) AS revenue_mes_anterior,
+    LAG(revenue) OVER (ORDER BY month) AS revenue_previous_month,
     ROUND(
         (revenue - LAG(revenue) OVER (ORDER BY month)) * 100.0
         / NULLIF(LAG(revenue) OVER (ORDER BY month), 0)
@@ -175,6 +204,6 @@ SELECT
             ORDER BY month
             ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
         )
-    , 0) AS revenue_promedio_movil_3m
+    , 0) AS revenue_3m_moving_avg
 FROM monthly_metrics
 ORDER BY month;
